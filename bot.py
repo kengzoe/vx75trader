@@ -6,7 +6,7 @@ import time
 import numpy as np
 from datetime import datetime, timezone
 from collections import deque
-from flask import Flask
+from flask import Flask, request
 import websocket
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # ========== CONFIG ==========
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DERIV_TOKEN = os.getenv("DERIV_TOKEN")
+RENDER_URL = os.getenv("RENDER_URL", "https://vx75trader.onrender.com")
 DERIV_APP_ID = "1089"
 SYMBOL = "R_100"
 STAKE = float(os.getenv("STAKE", "0.35"))
@@ -72,7 +73,7 @@ def on_message(ws_app, message):
         
         if RUNNING:
             if active_trade:
-                pass  # Deriv auto-closes tick contracts
+                pass
             else:
                 check_entry_signal()
     
@@ -270,7 +271,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Max loss: ${MAX_DAILY_LOSS}\n\n"
         "/start_bot - Start trading\n"
         "/stop_bot - Stop\n"
-        "/status - Check state"
+        "/status - Check state\n"
+        "/set_stake 0.50 - Change stake"
     )
 
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -308,7 +310,7 @@ async def set_stake(update: Update, context: ContextTypes.DEFAULT_TYPE):
     STAKE = float(context.args[0])
     await update.message.reply_text(f"✅ Stake: ${STAKE}")
 
-# ========== MAIN ==========
+# ========== APPLICATION ==========
 application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("start_bot", start_bot))
@@ -316,4 +318,27 @@ application.add_handler(CommandHandler("stop_bot", stop_bot))
 application.add_handler(CommandHandler("status", status))
 application.add_handler(CommandHandler("set_stake", set_stake))
 
+# ========== WEBHOOK SETUP ==========
+async def init_bot():
+    await application.initialize()
+    await application.bot.set_webhook(url=f"{RENDER_URL}/webhook")
+    logger.info("Webhook set!")
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    import asyncio
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(application.process_update(update))
+    return "ok"
+
+def run_init():
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_bot())
+
+# ========== START EVERYTHING ==========
+threading.Thread(target=run_init, daemon=True).start()
 threading.Thread(target=connect_deriv, daemon=True).start()
