@@ -79,6 +79,19 @@ def on_message(ws_app, message):
         # Now subscribe to ticks
         send_deriv({"ticks": SYMBOL, "subscribe": 1})
         return
+
+    # Handle auth response
+if "authorize" in data:
+    auth_data = data["authorize"]
+    logger.info(f"Auth successful! Login: {auth_data.get('loginid')}, Balance: {auth_data.get('balance')}")
+    # Now subscribe to ticks
+    send_deriv({"ticks": "R_75", "subscribe": 1})
+    return
+
+# Handle error
+if "error" in data:
+    logger.error(f"Deriv error: {data['error']}")
+    return
     
     # Handle ticks
     if "tick" in data:
@@ -138,7 +151,10 @@ def on_open(ws_app):
     global ws_connected
     ws_connected = True
     logger.info("Connected to Deriv")
-    send_deriv({"authorize": DERIV_TOKEN})
+    # Try different auth format
+    auth_msg = {"authorize": DERIV_TOKEN}
+    logger.info(f"Sending auth...")
+    ws.send(json.dumps(auth_msg))
 
 def connect_deriv():
     global ws
