@@ -1,3 +1,6 @@
+# Fix for Python 3.14 idna encoding
+import encodings.idna
+
 import os
 import json
 import logging
@@ -318,7 +321,7 @@ application.add_handler(CommandHandler("stop_bot", stop_bot))
 application.add_handler(CommandHandler("status", status))
 application.add_handler(CommandHandler("set_stake", set_stake))
 
-# ========== WEBHOOK SETUP ==========
+# ========== WEBHOOK ==========
 async def init_bot():
     await application.initialize()
     await application.bot.set_webhook(url=f"{RENDER_URL}/webhook")
@@ -339,6 +342,6 @@ def run_init():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_bot())
 
-# ========== START EVERYTHING ==========
+# ========== START ==========
 threading.Thread(target=run_init, daemon=True).start()
 threading.Thread(target=connect_deriv, daemon=True).start()
