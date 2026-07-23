@@ -22,7 +22,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DERIV_TOKEN = os.getenv("DERIV_TOKEN")
 RENDER_URL = os.getenv("RENDER_URL", "https://vx75trader.onrender.com")
 DERIV_APP_ID = "1089"
-SYMBOL = "R_50"
+SYMBOL = "R_75"
 STAKE = float(os.getenv("STAKE", "0.35"))
 MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "5"))
 MAX_DAILY_LOSS = float(os.getenv("MAX_DAILY_LOSS", "50"))
@@ -138,8 +138,7 @@ def on_open(ws_app):
     global ws_connected
     ws_connected = True
     logger.info("Connected to Deriv")
-    # Skip auth - just subscribe to ticks (works without token for prices)
-    send_deriv({"ticks": SYMBOL, "subscribe": 1})
+    send_deriv({"authorize": DERIV_TOKEN})
 
 def connect_deriv():
     global ws
