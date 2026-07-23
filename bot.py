@@ -138,8 +138,8 @@ def on_open(ws_app):
     global ws_connected
     ws_connected = True
     logger.info("Connected to Deriv")
-    # Authorize
-    send_deriv({"authorize": DERIV_TOKEN})
+    # Skip auth - just subscribe to ticks (works without token for prices)
+    send_deriv({"ticks": SYMBOL, "subscribe": 1})
 
 def connect_deriv():
     global ws
