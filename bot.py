@@ -56,8 +56,8 @@ def send_deriv(data):
     if ws and ws_connected:
         try:
             ws.send(json.dumps(data))
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Send error: {e}")
 
 def on_message(ws_app, message):
     global current_price, candles, active_trade, daily_pnl, daily_trades
@@ -67,6 +67,20 @@ def on_message(ws_app, message):
     except:
         return
     
+    # Handle errors
+    if "error" in data:
+        logger.error(f"Deriv error: {data['error']}")
+        return
+    
+    # Handle auth response
+    if "authorize" in data:
+        auth = data["authorize"]
+        logger.info(f"Auth: {auth.get('loginid', 'unknown')} | Balance: {auth.get('balance', 'N/A')}")
+        # Now subscribe to ticks
+        send_deriv({"ticks": SYMBOL, "subscribe": 1})
+        return
+    
+    # Handle ticks
     if "tick" in data:
         tick = data["tick"]
         price = float(tick["quote"])
@@ -80,6 +94,7 @@ def on_message(ws_app, message):
             else:
                 check_entry_signal()
     
+    # Handle trade opened
     if "buy" in data and "contract_id" in data["buy"]:
         active_trade = {
             "id": data["buy"]["contract_id"],
@@ -88,6 +103,7 @@ def on_message(ws_app, message):
         }
         logger.info(f"Trade opened: {data['buy']['contract_id']}")
     
+    # Handle trade closed
     if "proposal_open_contract" in data:
         poc = data["proposal_open_contract"]
         if poc.get("is_sold"):
@@ -114,7 +130,7 @@ def on_error(ws_app, error):
 def on_close(ws_app, status, msg):
     global ws_connected
     ws_connected = False
-    logger.info("Disconnected. Reconnecting...")
+    logger.info(f"Disconnected. Status: {status}, Msg: {msg}. Reconnecting...")
     time.sleep(5)
     connect_deriv()
 
@@ -122,9 +138,8 @@ def on_open(ws_app):
     global ws_connected
     ws_connected = True
     logger.info("Connected to Deriv")
+    # Authorize
     send_deriv({"authorize": DERIV_TOKEN})
-    time.sleep(1)
-    send_deriv({"ticks": SYMBOL, "subscribe": 1})
 
 def connect_deriv():
     global ws
@@ -347,7 +362,6 @@ def run_init():
 threading.Thread(target=run_init, daemon=True).start()
 threading.Thread(target=connect_deriv, daemon=True).start()
 
-# Run Flask on correct port
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
