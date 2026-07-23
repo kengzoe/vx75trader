@@ -346,3 +346,8 @@ def run_init():
 # ========== START ==========
 threading.Thread(target=run_init, daemon=True).start()
 threading.Thread(target=connect_deriv, daemon=True).start()
+
+# Run Flask on correct port
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)
