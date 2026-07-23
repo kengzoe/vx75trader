@@ -17,7 +17,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ========== CONFIG ==========
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DERIV_TOKEN = os.getenv("DERIV_TOKEN")
 RENDER_URL = os.getenv("RENDER_URL", "https://vx75trader.onrender.com")
@@ -31,7 +30,6 @@ USE_DEMO = os.getenv("USE_DEMO", "true").lower() == "true"
 CHAT_ID = None
 RUNNING = False
 
-# ========== STATE ==========
 ticks = deque(maxlen=500)
 candles = deque(maxlen=50)
 current_price = 0
@@ -41,14 +39,12 @@ active_trade = None
 last_trade_time = 0
 cooldown_seconds = 300
 
-# ========== FLASK ==========
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "VX75 Trader is running!"
 
-# ========== DERIV WEBSOCKET ==========
 ws = None
 ws_connected = False
 
@@ -67,56 +63,28 @@ def on_message(ws_app, message):
     except:
         return
     
-    # Handle errors
+    if "authorize" in data:
+        auth_data = data["authorize"]
+        logger.info(f"Auth success! Login: {auth_data.get('loginid')}, Balance: {auth_data.get('balance')}")
+        send_deriv({"ticks": "R_75", "subscribe": 1})
+        return
+    
     if "error" in data:
         logger.error(f"Deriv error: {data['error']}")
         return
     
-    # Handle auth response
-    if "authorize" in data:
-        auth = data["authorize"]
-        logger.info(f"Auth: {auth.get('loginid', 'unknown')} | Balance: {auth.get('balance', 'N/A')}")
-        # Now subscribe to ticks
-        send_deriv({"ticks": SYMBOL, "subscribe": 1})
-        return
-
-    # Handle auth response
-if "authorize" in data:
-    auth_data = data["authorize"]
-    logger.info(f"Auth successful! Login: {auth_data.get('loginid')}, Balance: {auth_data.get('balance')}")
-    # Now subscribe to ticks
-    send_deriv({"ticks": "R_75", "subscribe": 1})
-    return
-
-# Handle error
-if "error" in data:
-    logger.error(f"Deriv error: {data['error']}")
-    return
-    
-    # Handle ticks
     if "tick" in data:
-        tick = data["tick"]
-        price = float(tick["quote"])
+        price = float(data["tick"]["quote"])
         current_price = price
         ticks.append({"price": price, "time": time.time()})
         build_candles(price)
-        
-        if RUNNING:
-            if active_trade:
-                pass
-            else:
-                check_entry_signal()
+        if RUNNING and not active_trade:
+            check_entry_signal()
     
-    # Handle trade opened
     if "buy" in data and "contract_id" in data["buy"]:
-        active_trade = {
-            "id": data["buy"]["contract_id"],
-            "entry": current_price,
-            "time": time.time()
-        }
+        active_trade = {"id": data["buy"]["contract_id"], "entry": current_price, "time": time.time()}
         logger.info(f"Trade opened: {data['buy']['contract_id']}")
     
-    # Handle trade closed
     if "proposal_open_contract" in data:
         poc = data["proposal_open_contract"]
         if poc.get("is_sold"):
@@ -125,10 +93,9 @@ if "error" in data:
             daily_trades += 1
             active_trade = None
             logger.info(f"Trade closed. PnL: ${pnl:.2f}")
-            
             if CHAT_ID:
                 emoji = "🟢" if pnl > 0 else "🔴"
-                msg = f"{emoji} Trade Closed\nPnL: ${pnl:.2f}\nDaily: ${daily_pnl:.2f}\nTrades: {daily_trades}/{MAX_DAILY_TRADES}"
+                msg = f"{emoji} Trade Closed\nPnL: ${pnl:.2f}\nDaily: ${daily_pnl:.2f}"
                 try:
                     import asyncio
                     loop = asyncio.new_event_loop()
@@ -143,7 +110,7 @@ def on_error(ws_app, error):
 def on_close(ws_app, status, msg):
     global ws_connected
     ws_connected = False
-    logger.info(f"Disconnected. Status: {status}, Msg: {msg}. Reconnecting...")
+    logger.info(f"Disconnected. Reconnecting...")
     time.sleep(5)
     connect_deriv()
 
@@ -151,10 +118,7 @@ def on_open(ws_app):
     global ws_connected
     ws_connected = True
     logger.info("Connected to Deriv")
-    # Try different auth format
-    auth_msg = {"authorize": DERIV_TOKEN}
-    logger.info(f"Sending auth...")
-    ws.send(json.dumps(auth_msg))
+    ws.send(json.dumps({"authorize": DERIV_TOKEN}))
 
 def connect_deriv():
     global ws
@@ -167,14 +131,12 @@ def connect_deriv():
     )
     ws.run_forever(ping_interval=30, ping_timeout=10)
 
-# ========== CANDLE BUILDING ==========
 current_candle = None
 
 def build_candles(price):
     global current_candle
     now = datetime.now(timezone.utc)
     minute_key = now.strftime("%Y-%m-%d %H:%M")
-    
     if current_candle and current_candle["key"] == minute_key:
         current_candle["high"] = max(current_candle["high"], price)
         current_candle["low"] = min(current_candle["low"], price)
@@ -182,16 +144,8 @@ def build_candles(price):
     else:
         if current_candle:
             candles.append(current_candle)
-        current_candle = {
-            "key": minute_key,
-            "open": price,
-            "high": price,
-            "low": price,
-            "close": price,
-            "time": now
-        }
+        current_candle = {"key": minute_key, "open": price, "high": price, "low": price, "close": price, "time": now}
 
-# ========== INDICATORS ==========
 def calculate_bollinger(prices, period=20, std_dev=2):
     if len(prices) < period:
         return None, None, None
@@ -223,62 +177,36 @@ def detect_volume_spike():
     avg = len([t for t in ticks if now - t["time"] < 60]) / 6
     return recent > avg * 2 if avg > 0 else False
 
-# ========== TRADING LOGIC ==========
 def check_entry_signal():
     global active_trade, last_trade_time, daily_trades, daily_pnl
-    
-    if active_trade:
-        return
-    if daily_trades >= MAX_DAILY_TRADES:
-        return
-    if daily_pnl <= -MAX_DAILY_LOSS:
+    if active_trade or daily_trades >= MAX_DAILY_TRADES or daily_pnl <= -MAX_DAILY_LOSS:
         return
     if time.time() - last_trade_time < cooldown_seconds:
         return
     if len(candles) < 20:
         return
-    
     prices = [c["close"] for c in candles]
     current = prices[-1]
-    
     upper_bb, mid_bb, lower_bb = calculate_bollinger(prices)
     if upper_bb is None:
         return
-    
     rsi = calculate_rsi(prices)
     volume_spike = detect_volume_spike()
-    
     trade_type = None
-    
     if current <= lower_bb and rsi < 30 and volume_spike:
         trade_type = "CALL"
     elif current >= upper_bb and rsi > 70 and volume_spike:
         trade_type = "PUT"
-    
     if trade_type:
         execute_trade(trade_type)
 
 def execute_trade(trade_type):
     global last_trade_time
-    
-    send_deriv({
-        "buy": "1",
-        "price": str(STAKE),
-        "parameters": {
-            "contract_type": trade_type,
-            "amount": str(STAKE),
-            "currency": "USD",
-            "duration": 5,
-            "duration_unit": "t",
-            "symbol": SYMBOL
-        }
-    })
-    
+    send_deriv({"buy": "1", "price": str(STAKE), "parameters": {"contract_type": trade_type, "amount": str(STAKE), "currency": "USD", "duration": 5, "duration_unit": "t", "symbol": SYMBOL}})
     last_trade_time = time.time()
-    
     if CHAT_ID:
         emoji = "🟢" if trade_type == "CALL" else "🔴"
-        msg = f"{emoji} VX75 {trade_type}\nEntry: {current_price:.1f}\nStake: ${STAKE}\nDuration: 5 ticks"
+        msg = f"{emoji} VX75 {trade_type}\nEntry: {current_price:.1f}\nStake: ${STAKE}"
         try:
             import asyncio
             loop = asyncio.new_event_loop()
@@ -287,7 +215,6 @@ def execute_trade(trade_type):
         except:
             pass
 
-# ========== TELEGRAM ==========
 async def send_telegram(msg):
     if CHAT_ID:
         bot = ApplicationBuilder().token(TELEGRAM_TOKEN).build().bot
@@ -296,24 +223,11 @@ async def send_telegram(msg):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID
     CHAT_ID = update.effective_chat.id
-    await update.message.reply_text(
-        "🟣 VX75 AUTO-TRADER\n\n"
-        f"Mode: {'DEMO' if USE_DEMO else 'LIVE'}\n"
-        f"Stake: ${STAKE}\n"
-        f"Max trades/day: {MAX_DAILY_TRADES}\n"
-        f"Max loss: ${MAX_DAILY_LOSS}\n\n"
-        "/start_bot - Start trading\n"
-        "/stop_bot - Stop\n"
-        "/status - Check state\n"
-        "/set_stake 0.50 - Change stake"
-    )
+    await update.message.reply_text("🟣 VX75 AUTO-TRADER\n\nMode: DEMO\nStake: $" + str(STAKE) + "\n\n/start_bot /stop_bot /status /set_stake")
 
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global RUNNING, CHAT_ID
     CHAT_ID = update.effective_chat.id
-    if RUNNING:
-        await update.message.reply_text("Already running")
-        return
     RUNNING = True
     await update.message.reply_text("🚀 Trading activated!")
 
@@ -324,16 +238,7 @@ async def stop_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global current_price, daily_trades, daily_pnl, active_trade, RUNNING
-    await update.message.reply_text(
-        f"📊 VX75 STATUS\n\n"
-        f"Mode: {'DEMO' if USE_DEMO else 'LIVE'}\n"
-        f"Running: {'✅' if RUNNING else '❌'}\n"
-        f"Price: {current_price:.1f}\n"
-        f"Active trade: {'Yes' if active_trade else 'No'}\n"
-        f"Trades: {daily_trades}/{MAX_DAILY_TRADES}\n"
-        f"PnL: ${daily_pnl:.2f}\n"
-        f"Limit: ${MAX_DAILY_LOSS}"
-    )
+    await update.message.reply_text(f"📊 VX75 STATUS\n\nRunning: {'✅' if RUNNING else '❌'}\nPrice: {current_price:.1f}\nTrades: {daily_trades}/{MAX_DAILY_TRADES}\nPnL: ${daily_pnl:.2f}")
 
 async def set_stake(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global STAKE
@@ -343,7 +248,6 @@ async def set_stake(update: Update, context: ContextTypes.DEFAULT_TYPE):
     STAKE = float(context.args[0])
     await update.message.reply_text(f"✅ Stake: ${STAKE}")
 
-# ========== APPLICATION ==========
 application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("start_bot", start_bot))
@@ -351,7 +255,6 @@ application.add_handler(CommandHandler("stop_bot", stop_bot))
 application.add_handler(CommandHandler("status", status))
 application.add_handler(CommandHandler("set_stake", set_stake))
 
-# ========== WEBHOOK ==========
 async def init_bot():
     await application.initialize()
     await application.bot.set_webhook(url=f"{RENDER_URL}/webhook")
@@ -373,7 +276,6 @@ def run_init():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_bot())
 
-# ========== START ==========
 threading.Thread(target=run_init, daemon=True).start()
 threading.Thread(target=connect_deriv, daemon=True).start()
 
